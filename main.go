@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v7"
@@ -42,10 +43,21 @@ func login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := createToken(user.ID)
+	td, err := createToken(user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
+	}
+
+	err = createAuth(user.ID, td)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	token := map[string]string{
+		"access_token":  td.AccessToken,
+		"refresh_token": td.RefreshToken,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -97,6 +109,24 @@ func createToken(usrid uint64) (*TokenDetals, error) {
 }
 
 var client *redis.Client
+
+func createAuth(usrid uint64, td *TokenDetails) error {
+	at := time.Unix(td.AtExpires, 0) // convert unix to UTC
+	rt := time.Unix(td.RtExpires, 0) // convert unix to UTC
+	now := time.Now()
+
+	err := client.Set(td.AccessUUID, strconv.Itoa(int(usrid)), at.Sub(now)).Err()
+	if err != nil {
+		return err
+	}
+
+	err = client.Set(td.RefreshUUID, strconv.Itoa(int(usrid)), rt.Sub(now)).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
 
 func init() {
 	dsn := "localhost:6379"
