@@ -127,7 +127,7 @@ func sayHello(w http.ResponseWriter, r *http.Request) {
 func refresh(w http.ResponseWriter, r *http.Request) {
 	mapToken := map[string]string{}
 	d := json.NewDecoder(r.Body)
-	if err := d.Decode(mapToken); err != nil {
+	if err := d.Decode(&mapToken); err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
