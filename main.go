@@ -74,12 +74,14 @@ type TokenDetails struct {
 	RtExpires    int64
 }
 
-func createToken(usrid uint64) (*TokenDetals, error) {
-	td := &TokenDetals{}
+func createToken(usrid uint64) (*TokenDetails, error) {
+	var err error
+
+	td := &TokenDetails{}
 	td.AtExpires = time.Now().Add(time.Minute * 15).Unix()
 	td.AccessUUID = uuid.NewV4().String()
 	td.RtExpires = time.Now().Add(time.Hour * 24 * 7).Unix()
-	td.RefreshUUID = uui.NewV4().String()
+	td.RefreshUUID = uuid.NewV4().String()
 
 	// Create Access Token
 	atClaims := jwt.MapClaims{}
@@ -129,8 +131,8 @@ func createAuth(usrid uint64, td *TokenDetails) error {
 }
 
 func init() {
-	dsn := "localhost:6379"
-	client := redis.NewClient(&redis.Options{
+	dsn := "db:6379"
+	client = redis.NewClient(&redis.Options{
 		Addr: dsn, // redis port
 	})
 	_, err := client.Ping().Result()
