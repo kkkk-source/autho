@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v7"
@@ -28,6 +30,7 @@ func login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed),
 			http.StatusMethodNotAllowed)
+		return
 	}
 
 	var u User
@@ -63,6 +66,62 @@ func login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(token)
+}
+
+func logout(w http.ResponseWriter, r *http.Request) {
+	au, err := extractTokenMetadata(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	deleted, err := deleteAuth(au.AccessUUID)
+	if err != nil || deleted == 0 {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	msg := map[string]string{
+		"message": "Successfully logged out",
+		"status":  http.StatusText(http.StatusOK),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(msg)
+}
+
+func sayHello(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed),
+			http.StatusMethodNotAllowed)
+		return
+	}
+
+	tokenAuth, err := extractTokenMetadata(r)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	_, err = fetchAuth(tokenAuth)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	msg := map[string]string{
+		"message": "Why are you here?",
+		"status":  http.StatusText(http.StatusOK),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(msg)
 }
 
 type TokenDetails struct {
@@ -110,6 +169,99 @@ func createToken(usrid uint64) (*TokenDetails, error) {
 	return td, nil
 }
 
+func deleteAuth(givenuuid string) (int64, error) {
+	deleted, err := client.Del(givenuuid).Result()
+	if err != nil {
+		return 0, err
+	}
+
+	return deleted, nil
+}
+
+type AccessDetails struct {
+	AccessUUID string
+	UserID     uint64
+}
+
+func fetchAuth(ad *AccessDetails) (uint64, error) {
+	usrid, err := client.Get(ad.AccessUUID).Result()
+	if err != nil {
+		return 0, err
+	}
+
+	usrID, _ := strconv.ParseUint(usrid, 10, 64)
+	return usrID, nil
+}
+
+func extractTokenMetadata(r *http.Request) (*AccessDetails, error) {
+	token, err := verifyToken(r)
+	if err != nil {
+		return nil, err
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if ok && token.Valid {
+		accessUUID, ok := claims["access_uuid"].(string)
+		if !ok {
+			return nil, err
+		}
+
+		usrid, err := strconv.ParseUint(fmt.Sprintf("%.f",
+			claims["user_id"]), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		return &AccessDetails{
+			AccessUUID: accessUUID,
+			UserID:     usrid,
+		}, nil
+	}
+
+	return nil, err
+}
+
+func tokenValid(r *http.Request) error {
+	token, err := verifyToken(r)
+	if err != nil {
+		return err
+	}
+
+	if _, ok := token.Claims.(jwt.Claims); !ok && !token.Valid {
+		return err
+	}
+
+	return nil
+}
+
+func verifyToken(r *http.Request) (*jwt.Token, error) {
+	tokenStr := extractToken(r)
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		// Make sure the token method conform to "SigningMethodHMAC"
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		return []byte("secret1"), nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return token, nil
+}
+
+func extractToken(r *http.Request) string {
+	bearToken := r.Header.Get("Authorization")
+	str := strings.Split(bearToken, " ")
+	if len(str) == 2 {
+		return str[1]
+	}
+
+	return ""
+}
+
 var client *redis.Client
 
 func createAuth(usrid uint64, td *TokenDetails) error {
@@ -117,12 +269,16 @@ func createAuth(usrid uint64, td *TokenDetails) error {
 	rt := time.Unix(td.RtExpires, 0) // convert unix to UTC
 	now := time.Now()
 
-	err := client.Set(td.AccessUUID, strconv.Itoa(int(usrid)), at.Sub(now)).Err()
+	var err error
+
+	err = client.Set(td.AccessUUID, strconv.Itoa(int(usrid)),
+		at.Sub(now)).Err()
 	if err != nil {
 		return err
 	}
 
-	err = client.Set(td.RefreshUUID, strconv.Itoa(int(usrid)), rt.Sub(now)).Err()
+	err = client.Set(td.RefreshUUID, strconv.Itoa(int(usrid)),
+		rt.Sub(now)).Err()
 	if err != nil {
 		return err
 	}
@@ -143,5 +299,7 @@ func init() {
 
 func main() {
 	http.HandleFunc("/login", login)
+	http.HandleFunc("/logout", logout)
+	http.HandleFunc("/say", sayHello)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
