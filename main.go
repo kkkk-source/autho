@@ -124,6 +124,92 @@ func sayHello(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(msg)
 }
 
+func refresh(w http.ResponseWriter, r *http.Request) {
+	mapToken := map[string]string{}
+	d := json.NewDecoder(r.Body)
+	if err := d.Decode(mapToken); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	rt := mapToken["refresh_token"]
+	token, err := jwt.Parse(rt, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v",
+				token.Header["alg"])
+		}
+
+		return []byte("refresh_secret"), nil
+	})
+
+	// If there is an error, the token must have expired
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	// Is the token valid
+	if _, ok := token.Claims.(jwt.Claims); !ok && !token.Valid {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Since token is vaild, get the uuid
+	// The token claims should conform to MapClaims
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok || !token.Valid {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	refreshuuid, ok := claims["refresh_uuid"].(string)
+	if !ok {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	usrID, err := strconv.ParseUint(fmt.Sprintf("%.f", claims["user_id"]), 10, 64)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+
+	// Delete the previous Refresh Token
+	deleted, err := deleteAuth(refreshuuid)
+	if err != nil || deleted == 0 {
+		http.Error(w, http.StatusText(http.StatusUnauthorized),
+			http.StatusUnauthorized)
+		return
+	}
+
+	// Create new pairs of refresh and access tokens
+	ts, err := createToken(usrID)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusForbidden),
+			http.StatusForbidden)
+		return
+	}
+
+	// Save the tokens metadata to redis
+	err = createAuth(usrID, ts)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusForbidden),
+			http.StatusForbidden)
+		return
+	}
+
+	tokens := map[string]string{
+		"access_token":  ts.AccessToken,
+		"refresh_token": ts.RefreshToken,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(tokens)
+}
+
 type TokenDetails struct {
 	AccessToken  string
 	RefreshToken string
@@ -150,7 +236,7 @@ func createToken(usrid uint64) (*TokenDetails, error) {
 	atClaims["exp"] = td.AtExpires
 
 	at := jwt.NewWithClaims(jwt.SigningMethodHS256, atClaims)
-	td.AccessToken, err = at.SignedString([]byte("secret1"))
+	td.AccessToken, err = at.SignedString([]byte("access_secret"))
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +247,7 @@ func createToken(usrid uint64) (*TokenDetails, error) {
 	rtClaims["user_id"] = usrid
 	rtClaims["exp"] = td.RtExpires
 	rt := jwt.NewWithClaims(jwt.SigningMethodHS256, rtClaims)
-	td.RefreshToken, err = rt.SignedString([]byte("secret2"))
+	td.RefreshToken, err = rt.SignedString([]byte("refresh_secret"))
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +328,7 @@ func verifyToken(r *http.Request) (*jwt.Token, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 
-		return []byte("secret1"), nil
+		return []byte("access_secret"), nil
 	})
 
 	if err != nil {
@@ -300,6 +386,7 @@ func init() {
 func main() {
 	http.HandleFunc("/login", login)
 	http.HandleFunc("/logout", logout)
+	http.HandleFunc("/refresh", refresh)
 	http.HandleFunc("/say", sayHello)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
