@@ -18,18 +18,6 @@ curl \
 	-H "Accept: application/json" \
 	-H "Authorization: Bearer $access_token"
 
-# use the access token to logged out from the server.
-curl \
-	$hostname/logout \
-	-H "Accept: application/json" \
-	-H "Authorization: Bearer $access_token"
-
-# question: if i'm already logged out, can/should i use the refresh_token to
-# request an access token?
-#
-# answer: can    [yes]
-#         should [idk]
-
 # get the refresh token
 refresh_token=$(awk -F "\"" '{print $8}' $tmpfile)
 
@@ -39,3 +27,15 @@ curl \
 	-H "Accept: application/json" \
 	-X POST $hostname/refresh
 
+# question: after the refresh token has been used to request other access
+# token, the old access token (before it expires) can/should be use to access a
+# private resouce?
+#
+# answer: can    [yes]
+#         should [idk]
+
+# use the access token to access the resource
+curl \
+	$hostname/say \
+	-H "Accept: application/json" \
+	-H "Authorization: Bearer $access_token"
