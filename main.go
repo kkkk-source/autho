@@ -22,8 +22,8 @@ type User struct {
 
 var user = User{
 	ID:       1,
-	Username: "root",
-	Password: "toor",
+	Username: "abcd",
+	Password: "dcba",
 }
 
 func login(w http.ResponseWriter, r *http.Request) {
